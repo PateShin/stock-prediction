@@ -1,42 +1,45 @@
-# Stock Price Prediction with LSTM
+# Stock Price Prediction using LSTM
 
-This project is focused on predicting stock prices using Long Short-Term Memory (LSTM) networks, a type of recurrent neural network (RNN) suitable for sequential data. We utilize TensorFlow for constructing the LSTM model and Yahoo Finance (yfinance) to fetch historical stock data. The project also involves data preprocessing with scikit-learn's MinMaxScaler for normalizing the input features and matplotlib for visualizing the predicted stock prices against actual prices.
+This project aims to predict the future prices of stocks using Long Short-Term Memory (LSTM) networks, a type of recurrent neural network suitable for time series forecasting. The TensorFlow and Keras libraries are utilized to build the model, while the stock data is fetched using the Yahoo Finance API through the `yfinance` and `pandas_datareader` libraries.
 
 ## Features
 
-- Fetch stock data directly from Yahoo Finance using `yfinance`.
-- Normalize stock prices using MinMaxScaler for optimal LSTM model performance.
-- Build and train LSTM models customizable with different hyperparameters including learning rate, number of layers, and dropout rate.
-- Predict future stock prices and visualize the predictions against actual historical prices.
+- **Data Fetching**: Utilizes `yfinance` to download historical stock data.
+- **Preprocessing**: Employs `MinMaxScaler` from `sklearn` for normalizing the stock prices.
+- **Model**: Builds an LSTM-based model using TensorFlow and Keras for predicting future stock prices.
+- **Visualization**: Plots the predicted stock prices against the actual prices, including prediction intervals.
 
-## Dependencies
+## Prerequisites
 
-To run this project, you will need:
+Before you can run this project, you need to have the following installed:
 
-- Python 3.6+
+- Python 3.6 or higher
 - TensorFlow 2.x
 - NumPy
-- pandas
-- matplotlib
-- seaborn
-- scikit-learn
-- yfinance
+- Matplotlib
+- Seaborn
+- Pandas
+- Scikit-learn
+- `yfinance` and `pandas_datareader` for fetching stock data
 
-You can install these dependencies using `pip`:
+## Installation
 
+To install the required libraries, run the following command:
+
+```bash
+pip install numpy matplotlib seaborn pandas scikit-learn tensorflow yfinance pandas_datareader
+```
 
 ## Usage
+`predict_stock(Symbol, period, future_days)`
+Example: 
+```
+predict_stock('NG', '1y', 30)
+```
+# Example: Predicting the stock prices for 'NG' over a period of 1 year with a 30-day future prediction
+predict_stock('NG', '1y', 30)
+Replace 'your_script_name' with the name of the Python script file where the predict_stock function is defined.
 
-1. **Download Stock Data**: Use `download_stock_data(symbol, period)` to fetch historical stock data. The `symbol` parameter refers to the ticker symbol of the stock, and `period` defines the timeframe for which data is fetched.
 
-2. **Preprocess Data**: Normalize the stock data using `preprocess_data(data)` to prepare it for the LSTM model.
-
-3. **Build Model**: Construct the LSTM model with `build_model(learning_rate, num_layers, size_layer, input_shape, output_size, dropout_rate)`. Customize the model architecture by adjusting its parameters.
-
-4. **Predict and Plot Stock Prices**: Use `predict_and_plot_stock(symbol, period='1y', sim=5, future=30, epoch=100, timestamp=10)` to train the model with historical data and predict future stock prices. The function plots the actual vs. predicted prices for visualization.
-
-### Example
-
-```python
-predicted_prices, prediction_dates = predict_and_plot_stock('AAPL', period='1y', future=30)
-  
+# Visualization
+The output graph displays the actual stock prices in black, the forecasted prices in blue, and the prediction interval shaded in between, providing a visual assessment of the model's accuracy and uncertainty.
