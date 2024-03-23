@@ -1,85 +1,151 @@
-import os
+import tensorflow as tf
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import tensorflow as tf
+import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
-from datetime import datetime, timedelta
+from datetime import timedelta
+from tqdm import tqdm
+from scipy.stats import norm
+
+from pandas_datareader import data as pdr
 import yfinance as yf
 
 sns.set()
 tf.random.set_seed(1234)
 
+yf.pdr_override()
 
-def download_stock_data(symbol, period):
-    return yf.download(symbol, period=period, interval="1d")
-
-
-def preprocess_data(data):
-    scaler = MinMaxScaler()
-    close_prices = data['Close'].values.reshape(-1, 1)
-    scaled_data = scaler.fit_transform(close_prices)
-    return pd.DataFrame(scaled_data), scaler
-
-
-def build_model(learning_rate, num_layers, size_layer, input_shape, output_size, dropout_rate):
-    model = tf.keras.Sequential()
-    for _ in range(num_layers):
-        model.add(tf.keras.layers.LSTM(size_layer, return_sequences=True, input_shape=input_shape))
-        model.add(tf.keras.layers.Dropout(dropout_rate))
-    model.add(tf.keras.layers.LSTM(size_layer))
-    model.add(tf.keras.layers.Dense(output_size))
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss='mean_squared_error')
-    return model
+num_layers = 1
+size_layer = 128
+timestamp = 10
+epoch = 100
+dropout_rate = 0.8
+test_size = 30
+learning_rate = 0.01
 
 
-def predict_and_plot_stock(symbol, period='1y', sim=5, future=30, epoch=100, timestamp=10):
-    df = download_stock_data(symbol, period)
-    df_log, scaler = preprocess_data(df)
+def predict_stock(symbol, period, future):
+    test_size = future
 
-    model = build_model(learning_rate=0.01, num_layers=1, size_layer=128, input_shape=(timestamp, 1), output_size=1,
-                        dropout_rate=0.2)
+    # Download dataframe using pandas_datareader
+    df = pdr.get_data_yahoo(symbol, period=period, interval="1d")
+    df.to_csv('data.csv')
+    df = pd.read_csv('data.csv')
 
-    X_train = []
-    y_train = []
-    for i in range(timestamp, len(df_log)):
-        X_train.append(df_log.values[i - timestamp:i, 0])
-        y_train.append(df_log.values[i, 0])
-    X_train, y_train = np.array(X_train), np.array(y_train)
-    X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+    minmax = MinMaxScaler().fit(df.iloc[:, 4:5].astype('float32'))  # Close index
+    df_log = minmax.transform(df.iloc[:, 4:5].astype('float32'))  # Close index
+    df_log = pd.DataFrame(df_log)
 
-    model.fit(X_train, y_train, epochs=epoch, batch_size=32)
+    df_train = df_log
 
-    predictions = []
-    current_batch = X_train[-1].reshape((1, timestamp, 1))
-    for i in range(future):
-        current_pred = model.predict(current_batch)[0]
-        predictions.append(current_pred)
-        current_batch = np.roll(current_batch, -1)
-        current_batch[:, -1:, 0] = current_pred
+    class Model(tf.keras.Model):
+        def __init__(self, learning_rate, num_layers, size, size_layer, output_size, forget_bias=0.1):
+            super(Model, self).__init__()
 
-    predicted_prices = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
+            self.lstm_layers = [tf.keras.layers.LSTM(size_layer, return_sequences=True) for _ in range(num_layers)]
+            self.dropout = tf.keras.layers.Dropout(forget_bias)
+            self.dense = tf.keras.layers.Dense(output_size)
 
-    # Prepare dates for plotting
-    last_date = df.index[-1]
-    prediction_dates = pd.date_range(start=last_date, periods=future + 1)[1:]
+            self.optimizer = tf.keras.optimizers.Adam(learning_rate)
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(df.index, df['Close'], label='Actual Prices')
-    plt.plot(prediction_dates, predicted_prices, label='Predicted Prices', linestyle='--')
-    plt.title(f'{symbol} Stock Price Prediction')
+        def call(self, inputs):
+            x = inputs
+            for lstm_layer in self.lstm_layers:
+                x = lstm_layer(x)
+            x = self.dropout(x)
+            outputs = self.dense(x[:, -1, :])
+            return outputs
+
+    def calculate_mse(real, predict):
+        real = np.array(real)
+        predict = np.array(predict)
+        mse = np.mean(np.square(real - predict))
+        return mse
+
+    def anchor(signal, weight):
+        buffer = []
+        last = signal[0]
+        for i in signal:
+            smoothed_val = last * weight + (1 - weight) * i
+            buffer.append(smoothed_val)
+            last = smoothed_val
+        return buffer
+
+    def forecast():
+        modelnn = Model(learning_rate, num_layers, df_log.shape[1], size_layer, df_log.shape[1], dropout_rate)
+        date_ori = pd.to_datetime(df.iloc[:, 0]).tolist()
+
+        pbar = tqdm(range(epoch), desc='train loop')
+        for i in pbar:
+            total_loss = []
+            for k in range(0, df_train.shape[0] - 1, timestamp):
+                index = min(k + timestamp, df_train.shape[0] - 1)
+                batch_x = np.expand_dims(df_train.iloc[k: index, :].values, axis=0)
+                batch_y = df_train.iloc[k + 1: index + 1, :].values
+
+                with tf.GradientTape() as tape:
+                    logits = modelnn(batch_x)
+                    loss = tf.reduce_mean(tf.square(batch_y - logits))  # MSE loss
+
+                gradients = tape.gradient(loss, modelnn.trainable_variables)
+                modelnn.optimizer.apply_gradients(zip(gradients, modelnn.trainable_variables))
+
+                total_loss.append(loss)
+
+            pbar.set_postfix(cost=np.mean(total_loss))
+
+        future_day = test_size
+
+        output_predict = np.zeros((df_train.shape[0] + future_day, df_train.shape[1]))
+        output_predict[0] = df_train.iloc[0]
+        upper_b = (df_train.shape[0] // timestamp) * timestamp
+
+        for k in range(0, (df_train.shape[0] // timestamp) * timestamp, timestamp):
+            out_logits = modelnn(np.expand_dims(df_train.iloc[k: k + timestamp], axis=0))
+            output_predict[k + 1: k + timestamp + 1] = out_logits
+
+        if upper_b != df_train.shape[0]:
+            out_logits = modelnn(np.expand_dims(df_train.iloc[upper_b:], axis=0))
+            output_predict[upper_b + 1: df_train.shape[0] + 1] = out_logits
+            future_day -= 1
+            date_ori.append(date_ori[-1] + timedelta(days=1))
+
+        for i in range(future_day):
+            o = output_predict[-future_day - timestamp + i:-future_day + i]
+            out_logits = modelnn(np.expand_dims(o, axis=0))
+            output_predict[-future_day + i] = out_logits[-1]
+            date_ori.append(date_ori[-1] + timedelta(days=1))
+
+        output_predict = minmax.inverse_transform(output_predict)
+        deep_future = anchor(output_predict[:, 0], 0.4)
+
+        return deep_future
+
+    results = forecast()  # Run forecast once
+
+    date_ori = pd.to_datetime(df.iloc[:, 0]).tolist()
+    for i in range(test_size):
+        date_ori.append(date_ori[-1] + timedelta(days=1))
+    date_ori = pd.Series(date_ori).dt.strftime(date_format='%Y-%m-%d').tolist()
+
+    mse = calculate_mse(df['Close'].values, results[:-test_size])
+
+    # Calculate prediction intervals (assuming normally distributed errors)
+    std_dev = np.sqrt(mse)
+    lower_bound = results - 1.96 * std_dev  # 95% confidence interval
+    upper_bound = results + 1.96 * std_dev
+
+    plt.figure(figsize=(15, 7))
+    plt.plot(date_ori, results, label='Forecast')
+    plt.plot(df.iloc[:, 0].tolist(), df['Close'], label='Actual Trend', color='black', linewidth=2)
+    plt.fill_between(date_ori, lower_bound, upper_bound, alpha=0.3, label='Prediction Interval')
+    plt.title(f'Stock: {symbol} MSE: {mse:.4f}')
     plt.xlabel('Date')
-    plt.ylabel('Price')
-    plt.legend()
+    plt.ylabel('Stock Price')
     plt.xticks(rotation=45)
+    plt.legend()
     plt.tight_layout()
     plt.show()
 
-    return predicted_prices, prediction_dates
-
-
-# Example usage
-predicted_prices, prediction_dates = predict_and_plot_stock('NG', period='1y', sim=5, future=30)
-
-
+predict_stock('NG', '1y', 30)
